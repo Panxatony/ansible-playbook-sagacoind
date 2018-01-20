@@ -1,0 +1,2 @@
+[saga-masternode]
+puppy.example.net ansible_host=192.168.0.10 ansible_user=root ansible_port=22

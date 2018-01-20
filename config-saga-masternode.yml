@@ -1,0 +1,207 @@
+---
+- name: Config SAGACOIN masternode
+  hosts: saga-masternode
+  gather_facts: true
+  #serial: 1
+
+  vars:
+
+    saga_masternode_reqs:
+      - nano 
+      - htop
+      - git
+      - vim
+      - build-essential
+      - libtool
+      - autotools-dev
+      - automake
+      - pkg-config
+      - libssl-dev
+      - libevent-dev
+      - bsdmainutils
+      - software-properties-common
+      - libboost-all-dev
+      - libzmq3-dev
+      - libminiupnpc-dev
+      - libssl-dev
+      - libevent-dev
+      - fail2ban
+      - libdb5.3
+      - libdb5.3++
+      - ufw
+      - pwgen
+      - aptitude
+
+    saga_user: saga1
+    saga_group: saga1
+    sagacoin_git_repo: https://github.com/sagacrypto/SagaCoin
+    sagacoin_src_folder: "/home/{{ saga_user}}/SagaCoin"
+    bitcoin_apt_repo: "ppa:bitcoin/bitcoin"
+    sagacoin_release: sagacoin_1.0.0.5_ubuntu16.04
+    sagacoin_download_release: "https://github.com/sagacrypto/SagaCoin/releases/download/1.0.0.5/{{ sagacoin_release }}.tar.gz"  
+ 
+  tasks:
+
+    - name: Check if system role was already executed
+      register: system_role_status
+      check_mode: no
+      stat:
+        path=/etc/system-role-installed
+      become: yes
+      become_user: root
+
+    - name: Set authorized key took from file
+      authorized_key:
+        user: root
+        state: present
+        key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+      become: yes
+      become_user: root
+
+    - name: Ensure hostname is preserved in cloud-init
+      lineinfile: "dest=/etc/cloud/cloud.cfg regexp='^preserve_hostname' line='preserve_hostname: true' state=present"
+
+
+    - name: set motd
+      template: src=templates/etc_motd.j2 dest=/etc/motd owner=root group=root mode=0644
+      become: yes
+      become_user: root
+
+    - name: update all
+      apt:
+        upgrade: dist
+      become: yes
+      become_user: root
+
+    - name: restart "{{ ansible_hostname }}" machine
+      shell: sleep 2 && shutdown -r now "Ansible updates triggered"
+      async: 1
+      poll: 0
+      become: yes
+      become_user: root
+      ignore_errors: true
+      when: not system_role_status.stat.exists
+
+    - name: waiting for server "{{ ansible_hostname }}" to come back
+      local_action: wait_for port="{{ ansible_port }}" host="{{ ansible_host }}" state=started delay=30 timeout=300
+      become: no
+      when: not system_role_status.stat.exists
+
+    - name: add bitcoin repo
+      apt_repository:
+        repo: "{{ bitcoin_apt_repo }}"
+      become: yes
+      become_user: root
+
+    - name: install sagacoind dependencies
+      package:
+        name: "{{ item }}"
+        state: installed
+        update_cache: yes
+      with_items:
+        - "{{ saga_masternode_reqs }}"
+      become: yes
+      become_user: root
+
+    - name: create sagacoind group
+      group:
+        name: "{{ saga_group }}"
+        state: present
+      become: yes
+      become_user: root
+
+    - name: create sagacoind user
+      user:
+        name: "{{ saga_user }}"
+        shell: /bin/bash
+        groups: "{{ saga_group }},sudo"
+        state: present
+      become: yes
+      become_user: root
+
+    #- name: download git repo
+    #  git:
+    #   repo: "{{ sagacoin_git_repo }}"
+    #   dest: "{{ sagacoin_src_folder }}"
+    #   #version: release-0.22
+    #  become: yes
+    #  become_user: saga1
+
+    - name: download and extract sagacoin release
+      unarchive: 
+        src: "{{ sagacoin_download_release }}"
+        dest: /tmp/
+        remote_src: yes
+      become: yes
+      become_user: root
+
+    - name: copy sagacoin file
+      copy:
+        src: "/tmp/{{ sagacoin_release }}/sagacoind"
+        dest: /usr/local/bin/sagacoind
+        owner: "{{ saga_user }}"
+        group: "{{ saga_group }}"
+        mode: 0755
+        remote_src: yes
+      become: yes
+      become_user: root
+
+    - name: create sagacoin conf sagacoin
+      file:
+        path: "/home/{{ saga_user }}/.SagaCoin"
+        state: directory
+        mode: 0755
+      become: yes
+      become_user: "{{ saga_user }}"
+
+   # - name: copy sagacoind
+   #   template: src=templates/sagacoin.conf.j2 dest="/home/{{ saga_user }}/.SagaCoin/sagacoin.conf" owner="{{ saga_user }}" group="{{ saga_group }}" mode=0644
+   #   become: yes
+   #   become_user: "{{ saga_user }}"
+
+    - name: copy firewall template
+      template: src=templates/firewall.sh.j2 dest=/usr/local/bin/firewall.sh owner=root group=root mode=0755
+      become: yes
+      become_user: root
+
+    #- name: execute firewall script
+    #  command: /usr/local/bin/firewall.sh
+    #  become: yes
+    #  become_user: root
+
+    - name: enable fail2ban
+      systemd:
+        name: fail2ban
+        enabled: yes
+        state: started
+      become: yes
+      become_user: root
+
+    - name: Update and upgrade apt packages
+      apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 86400 #One day
+      become: yes
+      become_user: root
+
+  post_tasks:
+
+    - name: restart "{{ ansible_hostname }}" machine
+      shell: sleep 2 && shutdown -r now "Ansible updates triggered"
+      async: 1
+      poll: 0
+      become: yes
+      become_user: root
+      ignore_errors: true
+      when: not system_role_status.stat.exists
+      
+    - name: waiting for server "{{ ansible_hostname }}" to come back
+      local_action: wait_for port="{{ ansible_port }}" host="{{ ansible_host }}" state=started delay=30 timeout=600
+      become: no
+      when: not system_role_status.stat.exists
+      
+    - name: create system-state file
+      template: src="templates/system-state.j2" dest="/etc/system-role-installed" owner=root group=root mode=0644
+      become: yes
+      become_user: root
